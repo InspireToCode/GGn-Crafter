@@ -5,7 +5,7 @@
 // @match       https://gazellegames.net/user.php?action=inventory*
 // @match       https://gazellegames.net/user.php?action=crafting*
 // @icon         https://gazellegames.net/favicon.ico
-// @version     1.3
+// @version     1.3.1
 // @author      kdln | Based on FinalDoom's Quick Crafter data
 // @license     ISC
 // @grant       GM.getValue
@@ -6902,7 +6902,7 @@
                     ${recipeForItem ? `
                         <div class="action-row" style="padding: 12px 18px;">
                             <button class="action-btn primary inline-craft-btn" data-itemid="${recipeForItem.itemId}" ${canCraftNow ? '' : 'disabled'}>${canCraftNow ? 'Craft' : 'Need Items'}</button>
-                            <button class="action-btn open-craft-btn" data-recipe='${JSON.stringify({itemId: recipeForItem.itemId, recipe: recipeForItem.recipe, name: recipeName})}'>Open</button>
+                            <button class="action-btn open-craft-btn" data-recipe="${encodeURIComponent(JSON.stringify({itemId: recipeForItem.itemId, recipe: recipeForItem.recipe, name: recipeName}))}">Open</button>
                         </div>
                     ` : ''}
                 </div>
@@ -6936,7 +6936,7 @@
                 btn.dataset.boundOpen = '1';
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    const recipeData = JSON.parse(btn.dataset.recipe);
+                    const recipeData = JSON.parse(decodeURIComponent(btn.dataset.recipe));
                     openCraftingPage(recipeData);
                 });
             });
