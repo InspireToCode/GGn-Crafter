@@ -7,8 +7,6 @@ A Tampermonkey/Greasemonkey userscript for GazelleGames.net (GGn) that shows pla
 - **READY Tab**: Shows all recipes you can craft right now with current inventory
 - **NEED Tab**: Shows recipes you're close to being able to craft (missing 3 or fewer items)
 - **REPAIR Tab**: Shows equipment sorted by durability - broken items first, items closest to breaking next
-- **FAVS Tab**: Quick access to your favorite recipes
-- **PLAN Tab**: Queue up crafts to plan ahead
 - **GOALS Tab**: Set goals for items you want to craft
 - **BOOKS Tab**: Browse recipes by recipe book
 - **INV Tab**: View your current inventory
