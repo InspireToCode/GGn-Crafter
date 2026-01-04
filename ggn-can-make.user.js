@@ -5,7 +5,7 @@
 // @match       https://gazellegames.net/user.php?action=inventory*
 // @match       https://gazellegames.net/user.php?action=crafting*
 // @icon         https://gazellegames.net/favicon.ico
-// @version     1.3.1
+// @version     1.3.2
 // @author      kdln | Based on FinalDoom's Quick Crafter data
 // @license     ISC
 // @grant       GM.getValue
