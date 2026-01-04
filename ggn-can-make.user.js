@@ -5,7 +5,7 @@
 // @match       https://gazellegames.net/user.php?action=inventory*
 // @match       https://gazellegames.net/user.php?action=crafting*
 // @icon         https://gazellegames.net/favicon.ico
-// @version     1.1.0
+// @version     1.2
 // @author      kdln | Based on FinalDoom's Quick Crafter data
 // @license     ISC
 // @grant       GM.getValue
@@ -2949,9 +2949,7 @@
     const CRAFT_HISTORY_KEY = 'ggn_can_make_craft_history';
     const CRAFT_QUEUE_KEY = 'ggn_can_make_craft_queue';
     const NOTIFICATIONS_KEY = 'ggn_can_make_notifications';
-    const FAVORITES_KEY = 'ggn_can_make_favorites';
     const CRAFTING_STATS_KEY = 'ggn_can_make_stats';
-    const CRAFTING_PLAN_KEY = 'ggn_can_make_plan';
     const UI_PREFS_KEY = 'ggn_can_make_ui_prefs';
     const LAST_CRAFTABLE_KEY = 'ggn_can_make_last_craftable';
     const CRAFT_LOG_KEY = 'ggn_can_make_craft_log';
@@ -3727,11 +3725,18 @@
             };
         }
 
-        // If in stock or unknown (null), show Buy button
-        // For unknown, we show the button but it might fail
-        const stockIndicator = inStock === null
-            ? ''
-            : `<span style="color:#6a8a6a; font-size:8px; margin-left:4px;">(${stockStatus.text})</span>`;
+        // If stock is unknown (null), show a check stock button instead
+        if (inStock === null) {
+            return {
+                html: `<button class="action-btn buy-btn" data-itemid="${itemId}" data-quantity="${quantity}" data-name="${itemName}" data-gold="${goldPerItem}" data-needs-stock-check="true" style="padding:5px 10px; font-size:9px; background:#3a3a2a; border-color:#4a4a3a;${style}">Buy <span style="color:#9a9a6a; font-size:8px;">(?)</span></button>`,
+                canBuy: true,
+                canCraft: isCraftable,
+                needsStockCheck: true
+            };
+        }
+
+        // If confirmed in stock, show Buy button with stock count
+        const stockIndicator = `<span style="color:#6a8a6a; font-size:8px; margin-left:4px;">(${stockStatus.text})</span>`;
 
         return {
             html: `<button class="action-btn buy-btn" data-itemid="${itemId}" data-quantity="${quantity}" data-name="${itemName}" data-gold="${goldPerItem}" style="padding:5px 10px; font-size:9px; background:#1a3a1a; border-color:#2a5a2a;${style}">Buy${stockIndicator}</button>`,
@@ -3873,9 +3878,34 @@
         return getRecipeUses(recipe) > 0;
     }
 
+    // Check if ANY recipe producing this item has been crafted
+    // This handles the case where the same item can be crafted in different slot configurations
+    function isItemEverCrafted(itemId) {
+        if (!itemId) return false;
+
+        // Check craftedRecipeUses for any key starting with this itemId
+        for (const key in craftedRecipeUses) {
+            if (key.startsWith(itemId + ':') && craftedRecipeUses[key] > 0) {
+                return true;
+            }
+        }
+
+        // Also check recipe.uses on all recipes for this item
+        const allRecipes = getAllRecipes();
+        for (const recipe of allRecipes) {
+            if (recipe.itemId === itemId && recipe.uses > 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     function getUncraftedBadge(recipe) {
+        // Check if this specific recipe has been crafted OR if any recipe for this item has been crafted
         if (isRecipeCrafted(recipe)) return '';
-        return '<span class="uncrafted-badge" title="Not crafted yet">NC</span>';
+        if (isItemEverCrafted(recipe.itemId)) return '';
+        return '<span class="uncrafted-badge" title="Never Crafted - SYNC to import">NC</span>';
     }
 
     // Get count of total crafted items
@@ -4461,39 +4491,6 @@
     }
 
     // ============================================
-    // FAVORITES SYSTEM
-    // ============================================
-    async function getFavorites() {
-        try {
-            const saved = await GM.getValue(FAVORITES_KEY, '[]');
-            return JSON.parse(saved);
-        } catch (e) {
-            return [];
-        }
-    }
-
-    async function saveFavorites(favorites) {
-        await GM.setValue(FAVORITES_KEY, JSON.stringify(favorites));
-    }
-
-    async function toggleFavorite(recipeId) {
-        const favorites = await getFavorites();
-        const idx = favorites.indexOf(recipeId);
-        if (idx === -1) {
-            favorites.push(recipeId);
-        } else {
-            favorites.splice(idx, 1);
-        }
-        await saveFavorites(favorites);
-        return idx === -1; // returns true if added, false if removed
-    }
-
-    async function isFavorite(recipeId) {
-        const favorites = await getFavorites();
-        return favorites.includes(recipeId);
-    }
-
-    // ============================================
     // CRAFTING STATS SYSTEM
     // ============================================
     async function getCraftingStats() {
@@ -4993,10 +4990,13 @@
                 recipeCategory: prefs.recipeCategory || 'All',
                 petsLevel0Only,
                 promptUnknownRecipes: typeof prefs.promptUnknownRecipes === 'boolean' ? prefs.promptUnknownRecipes : true,
-                autoOpenPanel: typeof prefs.autoOpenPanel === 'boolean' ? prefs.autoOpenPanel : true
+                autoOpenPanel: typeof prefs.autoOpenPanel === 'boolean' ? prefs.autoOpenPanel : true,
+                // Accessibility options
+                fontSize: prefs.fontSize || 'medium', // small, medium, large
+                colorTheme: prefs.colorTheme || 'default' // default, high-contrast, light
             };
         } catch (e) {
-            return { sortBy: 'name', sortDir: 'asc', viewMode: 'list', collapsedSections: [], recipeCategory: 'All', petsLevel0Only: true, promptUnknownRecipes: true, autoOpenPanel: true };
+            return { sortBy: 'name', sortDir: 'asc', viewMode: 'list', collapsedSections: [], recipeCategory: 'All', petsLevel0Only: true, promptUnknownRecipes: true, autoOpenPanel: true, fontSize: 'medium', colorTheme: 'default' };
         }
     }
 
@@ -5053,87 +5053,6 @@
         panel.style.left = `${Math.round(left)}px`;
         panel.style.top = `${Math.round(top)}px`;
         panel.style.right = 'auto';
-    }
-
-    // ============================================
-    // CRAFTING PLANNER SYSTEM
-    // ============================================
-    async function getCraftingPlan() {
-        try {
-            const saved = await GM.getValue(CRAFTING_PLAN_KEY, '{}');
-            const plan = JSON.parse(saved);
-            return {
-                items: plan.items || [],
-                name: plan.name || 'Untitled Plan',
-                created: plan.created || null,
-                modified: plan.modified || null
-            };
-        } catch (e) {
-            return { items: [], name: 'Untitled Plan', created: null, modified: null };
-        }
-    }
-
-    async function saveCraftingPlan(plan) {
-        plan.modified = Date.now();
-        if (!plan.created) plan.created = Date.now();
-        await GM.setValue(CRAFTING_PLAN_KEY, JSON.stringify(plan));
-    }
-
-    async function addToPlan(recipe, quantity = 1) {
-        const plan = await getCraftingPlan();
-        const existing = plan.items.find(i => i.recipeId === recipe.id || (i.itemId === recipe.itemId && i.recipe === recipe.recipe));
-        if (existing) {
-            existing.quantity += quantity;
-        } else {
-            plan.items.push({
-                recipeId: recipe.id,
-                itemId: recipe.itemId,
-                recipe: recipe.recipe,
-                name: recipe.name || getItemName(recipe.itemId),
-                quantity: quantity,
-                added: Date.now()
-            });
-        }
-        await saveCraftingPlan(plan);
-        return plan;
-    }
-
-    async function removeFromPlan(index) {
-        const plan = await getCraftingPlan();
-        plan.items.splice(index, 1);
-        await saveCraftingPlan(plan);
-        return plan;
-    }
-
-    async function clearPlan() {
-        await GM.setValue(CRAFTING_PLAN_KEY, JSON.stringify({ items: [], name: 'Untitled Plan', created: null, modified: null }));
-    }
-
-    // Calculate all ingredients needed for a plan
-    function calculatePlanIngredients(plan, inventory) {
-        const needed = {};
-        const allRecipes = getAllRecipes();
-
-        for (const planItem of plan.items) {
-            const recipe = allRecipes.find(r => r.id === planItem.recipeId || (r.itemId === planItem.itemId && r.recipe === planItem.recipe));
-            if (recipe) {
-                const ingredients = parseRecipe(recipe.recipe);
-                for (const [itemId, qty] of Object.entries(ingredients)) {
-                    needed[itemId] = (needed[itemId] || 0) + (qty * planItem.quantity);
-                }
-            }
-        }
-
-        // Calculate what's missing
-        const missing = {};
-        for (const [itemId, qty] of Object.entries(needed)) {
-            const have = getEffectiveInventoryCount(parseInt(itemId, 10), inventory);
-            if (have < qty) {
-                missing[itemId] = qty - have;
-            }
-        }
-
-        return { needed, missing };
     }
 
     // ============================================
@@ -5465,64 +5384,6 @@
         }
 
         return result;
-    }
-
-    // ============================================
-    // SHARE/EXPORT SYSTEM
-    // ============================================
-    function exportPlanToText(plan) {
-        const lines = [`=== ${plan.name} ===`, ''];
-        const allItems = getAllItems();
-
-        for (const item of plan.items) {
-            lines.push(`${item.quantity}x ${item.name}`);
-        }
-
-        lines.push('');
-        lines.push('--- Ingredients Needed ---');
-
-        const allIngredients = {};
-        const allRecipes = getAllRecipes();
-        for (const planItem of plan.items) {
-            const recipe = allRecipes.find(r => r.itemId === planItem.itemId);
-            if (recipe) {
-                const ingredients = parseRecipe(recipe.recipe);
-                for (const [itemId, qty] of Object.entries(ingredients)) {
-                    allIngredients[itemId] = (allIngredients[itemId] || 0) + (qty * planItem.quantity);
-                }
-            }
-        }
-
-        let totalCost = 0;
-        for (const [itemId, qty] of Object.entries(allIngredients)) {
-            const item = allItems[itemId];
-            const cost = (item?.gold || 0) * qty;
-            totalCost += cost;
-            lines.push(`${qty}x ${item?.name || 'Unknown'} (${cost.toLocaleString()}g)`);
-        }
-
-        lines.push('');
-        lines.push(`Total Cost: ${totalCost.toLocaleString()}g`);
-        lines.push('');
-        lines.push('Generated by GGn Can Make');
-
-        return lines.join('\n');
-    }
-
-    function exportPlanToJSON(plan) {
-        return JSON.stringify(plan, null, 2);
-    }
-
-    function importPlanFromJSON(jsonStr) {
-        try {
-            const plan = JSON.parse(jsonStr);
-            if (plan.items && Array.isArray(plan.items)) {
-                return { success: true, plan };
-            }
-            return { success: false, error: 'Invalid plan format' };
-        } catch (e) {
-            return { success: false, error: e.message };
-        }
     }
 
     // ============================================
@@ -6646,12 +6507,10 @@
     }
 
     async function createUI(inventory, meta = {}) {
-        // Load UI preferences, favorites, stats, plan, goals, and owned books
+        // Load UI preferences, stats, goals, and owned books
         const uiPrefs = await getUIPrefs();
         currentUiPrefs = uiPrefs;
-        const favorites = await getFavorites();
         const craftingStats = await getCraftingStats();
-        const craftingPlan = await getCraftingPlan();
         const itemGoals = await getItemGoals();
         const lastCraftableIds = await getLastCraftableRecipes();
         const ownedBooks = await getOwnedBooks();
@@ -6699,14 +6558,8 @@
         const newlyAvailable = findNewlyAvailableRecipes(currentCraftableIds, lastCraftableIds);
         await saveLastCraftableRecipes(currentCraftableIds);
 
-        // Filter favorites
-        const favoriteCraftable = craftable.filter(c => favorites.includes(c.recipe.itemId) || favorites.includes(c.recipe.id));
-        const favoriteAlmost = almostCraftable.filter(c => favorites.includes(c.recipe.itemId) || favorites.includes(c.recipe.id));
-
         const filteredCraftable = filterRecipeEntriesByCategory(craftable, recipeCategory);
         const filteredAlmostCraftable = filterRecipeEntriesByCategory(almostCraftable, recipeCategory);
-        const filteredFavoriteCraftable = filterRecipeEntriesByCategory(favoriteCraftable, recipeCategory);
-        const filteredFavoriteAlmost = filterRecipeEntriesByCategory(favoriteAlmost, recipeCategory);
 
         // Apply sorting based on UI preferences
         const recipeKey = (recipe) => `${recipe.itemId}:${recipe.recipe}`;
@@ -7010,15 +6863,55 @@
                     const itemName = btn.dataset.name;
                     const goldEach = parseInt(btn.dataset.gold, 10);
                     const totalCost = goldEach * quantity;
-
-                    const confirmed = confirm(`Buy ${quantity}× ${itemName}?\n\nCost: ${totalCost.toLocaleString()} gold\n\nThis will purchase directly via API.`);
-                    if (!confirmed) return;
+                    const needsStockCheck = btn.dataset.needsStockCheck === 'true';
 
                     const apiKey = await getApiKey();
                     if (!apiKey) {
                         alert('API key required for purchases. Please set your API key first.');
                         return;
                     }
+
+                    // If stock is unknown, check it first
+                    if (needsStockCheck) {
+                        btn.textContent = 'Checking...';
+                        btn.disabled = true;
+                        btn.style.opacity = '0.6';
+
+                        try {
+                            await fetchStockInfo(apiKey, [itemId]);
+                            const inStock = isInStock(itemId);
+
+                            if (inStock === false) {
+                                btn.textContent = 'Out of Stock';
+                                btn.style.background = '#5a3a2a';
+                                btn.style.color = '#fa8a8a';
+                                btn.disabled = true;
+                                return;
+                            }
+
+                            // Update button to show stock
+                            const stockStatus = getStockStatus(itemId);
+                            btn.innerHTML = `Buy <span style="color:#6a8a6a; font-size:8px; margin-left:4px;">(${stockStatus.text})</span>`;
+                            btn.style.background = '#1a3a1a';
+                            btn.style.borderColor = '#2a5a2a';
+                            btn.disabled = false;
+                            btn.style.opacity = '';
+                            delete btn.dataset.needsStockCheck;
+                        } catch (err) {
+                            btn.textContent = 'Check Failed';
+                            btn.style.background = '#5a3a2a';
+                            setTimeout(() => {
+                                btn.innerHTML = `Buy <span style="color:#9a9a6a; font-size:8px;">(?)</span>`;
+                                btn.style.background = '#3a3a2a';
+                                btn.disabled = false;
+                                btn.style.opacity = '';
+                            }, 1500);
+                            return;
+                        }
+                    }
+
+                    const confirmed = confirm(`Buy ${quantity}× ${itemName}?\n\nCost: ${totalCost.toLocaleString()} gold\n\nThis will purchase directly via API.`);
+                    if (!confirmed) return;
 
                     const originalText = btn.textContent;
                     btn.textContent = 'Buying...';
@@ -7043,6 +6936,13 @@
                         btn.textContent = 'Failed';
                         btn.style.background = '#5a2a2a';
                         btn.style.color = '#fa8a8a';
+
+                        // Check if it's an out of stock error
+                        if (result.error && result.error.toLowerCase().includes('stock')) {
+                            updateStockInfo(itemId, 0, false);
+                            await saveStockInfo();
+                        }
+
                         alert(`Purchase failed: ${result.error}\n\n${result.purchased > 0 ? `Purchased ${result.purchased} of ${quantity} items before error.` : ''}`);
 
                         setTimeout(() => {
@@ -7058,13 +6958,6 @@
             });
         }
 
-        // Calculate plan ingredients
-        const planCalc = calculatePlanIngredients(craftingPlan, inventory);
-        const planTotalCost = Object.entries(planCalc.missing).reduce((sum, [id, qty]) => {
-            const allItems = getAllItems();
-            return sum + (allItems[id]?.gold || 0) * qty;
-        }, 0);
-
         // Get most crafted recipes for stats
         const mostCrafted = getMostCraftedRecipes(craftingStats, 5);
 
@@ -7073,9 +6966,242 @@
         // Create the UI panel
         const panel = document.createElement('div');
         panel.id = 'ggn-can-make-panel';
+        // Apply accessibility classes
+        panel.classList.add('font-' + (uiPrefs.fontSize || 'medium'));
+        if (uiPrefs.colorTheme && uiPrefs.colorTheme !== 'default') {
+            panel.classList.add('theme-' + uiPrefs.colorTheme);
+        }
         panel.innerHTML = `
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+                /* Font Size Variants - Small */
+                #ggn-can-make-panel.font-small { font-size: 10px; }
+                #ggn-can-make-panel.font-small .item-name { font-size: 11px; }
+                #ggn-can-make-panel.font-small .tab { font-size: 9px; padding: 6px 8px; }
+                #ggn-can-make-panel.font-small .item-meta,
+                #ggn-can-make-panel.font-small .gold-value,
+                #ggn-can-make-panel.font-small .count,
+                #ggn-can-make-panel.font-small .inv-label,
+                #ggn-can-make-panel.font-small .inv-value,
+                #ggn-can-make-panel.font-small .stat-value,
+                #ggn-can-make-panel.font-small .stat-label,
+                #ggn-can-make-panel.font-small .repair-item-name,
+                #ggn-can-make-panel.font-small .repair-status,
+                #ggn-can-make-panel.font-small .goal-name,
+                #ggn-can-make-panel.font-small .book-name,
+                #ggn-can-make-panel.font-small label,
+                #ggn-can-make-panel.font-small select,
+                #ggn-can-make-panel.font-small input,
+                #ggn-can-make-panel.font-small button { font-size: 10px; }
+
+                /* Font Size Variants - Medium (Default) */
+                #ggn-can-make-panel.font-medium { font-size: 12px; }
+                #ggn-can-make-panel.font-medium .item-name { font-size: 13px; }
+                #ggn-can-make-panel.font-medium .tab { font-size: 10px; padding: 8px 12px; }
+                #ggn-can-make-panel.font-medium .item-meta,
+                #ggn-can-make-panel.font-medium .gold-value,
+                #ggn-can-make-panel.font-medium .count,
+                #ggn-can-make-panel.font-medium .inv-label,
+                #ggn-can-make-panel.font-medium .inv-value,
+                #ggn-can-make-panel.font-medium .stat-value,
+                #ggn-can-make-panel.font-medium .stat-label,
+                #ggn-can-make-panel.font-medium .repair-item-name,
+                #ggn-can-make-panel.font-medium .repair-status,
+                #ggn-can-make-panel.font-medium .goal-name,
+                #ggn-can-make-panel.font-medium .book-name,
+                #ggn-can-make-panel.font-medium label,
+                #ggn-can-make-panel.font-medium select,
+                #ggn-can-make-panel.font-medium input,
+                #ggn-can-make-panel.font-medium button { font-size: 12px; }
+
+                /* Font Size Variants - Large */
+                #ggn-can-make-panel.font-large { font-size: 14px; }
+                #ggn-can-make-panel.font-large .item-name { font-size: 15px; }
+                #ggn-can-make-panel.font-large .tab { font-size: 12px; padding: 10px 14px; }
+                #ggn-can-make-panel.font-large .item-meta,
+                #ggn-can-make-panel.font-large .gold-value,
+                #ggn-can-make-panel.font-large .count,
+                #ggn-can-make-panel.font-large .inv-label,
+                #ggn-can-make-panel.font-large .inv-value,
+                #ggn-can-make-panel.font-large .stat-value,
+                #ggn-can-make-panel.font-large .stat-label,
+                #ggn-can-make-panel.font-large .repair-item-name,
+                #ggn-can-make-panel.font-large .repair-status,
+                #ggn-can-make-panel.font-large .goal-name,
+                #ggn-can-make-panel.font-large .book-name,
+                #ggn-can-make-panel.font-large label,
+                #ggn-can-make-panel.font-large select,
+                #ggn-can-make-panel.font-large input,
+                #ggn-can-make-panel.font-large button { font-size: 14px; }
+
+                /* High Contrast Theme */
+                #ggn-can-make-panel.theme-high-contrast {
+                    background: #000 !important;
+                    border-color: #fff !important;
+                    color: #fff !important;
+                }
+                #ggn-can-make-panel.theme-high-contrast .item-name,
+                #ggn-can-make-panel.theme-high-contrast .repair-item-name {
+                    color: #fff !important;
+                }
+                #ggn-can-make-panel.theme-high-contrast .item-details,
+                #ggn-can-make-panel.theme-high-contrast .repair-item-details {
+                    color: #ccc !important;
+                }
+                #ggn-can-make-panel.theme-high-contrast .tab {
+                    color: #fff !important;
+                    border-color: #666 !important;
+                }
+                #ggn-can-make-panel.theme-high-contrast .tab.active {
+                    background: #333 !important;
+                    border-color: #fff !important;
+                }
+                #ggn-can-make-panel.theme-high-contrast .action-btn {
+                    border-color: #fff !important;
+                    color: #fff !important;
+                }
+                #ggn-can-make-panel.theme-high-contrast .action-btn.primary {
+                    background: #006600 !important;
+                }
+                #ggn-can-make-panel.theme-high-contrast .gold-value {
+                    color: #ffff00 !important;
+                }
+
+                /* Light Theme */
+                #ggn-can-make-panel.theme-light {
+                    background: #f5f5f7 !important;
+                    color: #222 !important;
+                    border-color: #ccc !important;
+                }
+                #ggn-can-make-panel.theme-light .item-name,
+                #ggn-can-make-panel.theme-light .repair-item-name,
+                #ggn-can-make-panel.theme-light .goal-name,
+                #ggn-can-make-panel.theme-light .book-name {
+                    color: #111 !important;
+                }
+                #ggn-can-make-panel.theme-light .item-details,
+                #ggn-can-make-panel.theme-light .repair-item-details,
+                #ggn-can-make-panel.theme-light .item-meta,
+                #ggn-can-make-panel.theme-light .count {
+                    color: #555 !important;
+                }
+                #ggn-can-make-panel.theme-light .tab {
+                    color: #444 !important;
+                    background: #e8e8ec !important;
+                    border-color: #ccc !important;
+                }
+                #ggn-can-make-panel.theme-light .tab:hover {
+                    background: #ddd !important;
+                }
+                #ggn-can-make-panel.theme-light .tab.active {
+                    background: #fff !important;
+                    color: #000 !important;
+                    border-bottom-color: #fff !important;
+                }
+                #ggn-can-make-panel.theme-light .tab-bar {
+                    background: #e0e0e5 !important;
+                    border-color: #ccc !important;
+                }
+                #ggn-can-make-panel.theme-light .content {
+                    background: #fff !important;
+                }
+                #ggn-can-make-panel.theme-light .tab-content {
+                    background: #fff !important;
+                }
+                #ggn-can-make-panel.theme-light .action-btn {
+                    background: #e8e8ec !important;
+                    border-color: #bbb !important;
+                    color: #333 !important;
+                }
+                #ggn-can-make-panel.theme-light .action-btn:hover {
+                    background: #ddd !important;
+                }
+                #ggn-can-make-panel.theme-light .action-btn.primary {
+                    background: #3a8a3a !important;
+                    color: #fff !important;
+                    border-color: #2a7a2a !important;
+                }
+                #ggn-can-make-panel.theme-light .action-btn.primary:hover {
+                    background: #2a7a2a !important;
+                }
+                #ggn-can-make-panel.theme-light .gold-value {
+                    color: #886600 !important;
+                }
+                #ggn-can-make-panel.theme-light .gold-value.profit {
+                    color: #228822 !important;
+                }
+                #ggn-can-make-panel.theme-light .gold-value.loss {
+                    color: #cc3333 !important;
+                }
+                #ggn-can-make-panel.theme-light .header {
+                    background: #e8e8ec !important;
+                    border-color: #ccc !important;
+                }
+                #ggn-can-make-panel.theme-light .title {
+                    color: #222 !important;
+                }
+                #ggn-can-make-panel.theme-light .item {
+                    border-color: #ddd !important;
+                    background: #fff !important;
+                }
+                #ggn-can-make-panel.theme-light .item:hover {
+                    background: #f0f0f5 !important;
+                }
+                #ggn-can-make-panel.theme-light .inventory-header {
+                    background: #e8e8ec !important;
+                    border-color: #ccc !important;
+                }
+                #ggn-can-make-panel.theme-light .inv-label,
+                #ggn-can-make-panel.theme-light .stat-label {
+                    color: #666 !important;
+                }
+                #ggn-can-make-panel.theme-light .inv-value,
+                #ggn-can-make-panel.theme-light .stat-value {
+                    color: #222 !important;
+                }
+                #ggn-can-make-panel.theme-light select,
+                #ggn-can-make-panel.theme-light input[type="text"],
+                #ggn-can-make-panel.theme-light input[type="number"] {
+                    background: #fff !important;
+                    border-color: #bbb !important;
+                    color: #222 !important;
+                }
+                #ggn-can-make-panel.theme-light .sort-btn {
+                    background: #e8e8ec !important;
+                    border-color: #bbb !important;
+                    color: #444 !important;
+                }
+                #ggn-can-make-panel.theme-light .sort-btn:hover {
+                    background: #ddd !important;
+                }
+                #ggn-can-make-panel.theme-light .sort-btn.active {
+                    background: #3a6a9a !important;
+                    color: #fff !important;
+                }
+                #ggn-can-make-panel.theme-light .repair-status {
+                    color: #444 !important;
+                }
+                #ggn-can-make-panel.theme-light .repair-item {
+                    background: #fff !important;
+                    border-color: #ddd !important;
+                }
+                #ggn-can-make-panel.theme-light .repair-item:hover {
+                    background: #f5f5f8 !important;
+                }
+                #ggn-can-make-panel.theme-light .no-items {
+                    color: #666 !important;
+                }
+                #ggn-can-make-panel.theme-light label {
+                    color: #444 !important;
+                }
+                #ggn-can-make-panel.theme-light .sort-controls {
+                    background: #e8e8ec !important;
+                    border-color: #ccc !important;
+                }
+                #ggn-can-make-panel.theme-light .sort-label {
+                    color: #666 !important;
+                }
 
                 #ggn-can-make-panel {
                     position: fixed;
@@ -8185,27 +8311,6 @@
                     border-top: 1px solid #32323c;
                 }
 
-                /* Favorite Star */
-                #ggn-can-make-panel .fav-star {
-                    cursor: pointer;
-                    font-size: 12px;
-                    margin-right: 6px;
-                    opacity: 0.3;
-                    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-                    filter: grayscale(1);
-                }
-                #ggn-can-make-panel .fav-star:hover {
-                    opacity: 0.7;
-                    filter: grayscale(0);
-                    transform: scale(1.15);
-                }
-                #ggn-can-make-panel .fav-star.active {
-                    opacity: 1;
-                    color: #f0c040;
-                    filter: grayscale(0);
-                    text-shadow: 0 0 10px rgba(240,192,64,0.6);
-                }
-
                 /* Sort Controls */
                 #ggn-can-make-panel .sort-controls {
                     display: flex;
@@ -8322,33 +8427,6 @@
                     line-height: 1.3;
                 }
 
-                /* Plan Items */
-                #ggn-can-make-panel .plan-item {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    padding: 12px 18px;
-                    border-bottom: 1px solid #2a2a32;
-                }
-                #ggn-can-make-panel .plan-item:hover {
-                    background: #252530;
-                }
-                #ggn-can-make-panel .plan-name {
-                    color: #d0d0d8;
-                    font-size: 13px;
-                }
-                #ggn-can-make-panel .plan-qty {
-                    background: #3a3a45;
-                    color: #b0b0c0;
-                    padding: 2px 8px;
-                    border-radius: 3px;
-                    font-size: 11px;
-                }
-                #ggn-can-make-panel .plan-controls {
-                    display: flex;
-                    gap: 8px;
-                    align-items: center;
-                }
                 #ggn-can-make-panel .qty-btn {
                     background: #2a2a32;
                     border: 1px solid #3a3a45;
@@ -9049,9 +9127,7 @@
             <div class="tab-bar">
                 <div class="tab active" data-tab="craftable">READY<span class="count">[${filteredCraftable.length}]</span>${newlyAvailable.length > 0 ? '<span class="new-badge">NEW</span>' : ''}</div>
                 <div class="tab" data-tab="almost">NEED<span class="count">[${filteredAlmostCraftable.length}]</span></div>
-                <div class="tab" data-tab="repair">REPAIR<span class="count">[${repairableEquipment.length}]</span>${brokenEquipment.length > 0 ? '<span class="new-badge" style="background:#dc3545;">!</span>' : urgentRepairs.length > 0 ? '<span class="new-badge" style="background:#ffc107;color:#000;">!</span>' : ''}</div>
-                <div class="tab" data-tab="favorites">FAVS<span class="count">[${filteredFavoriteCraftable.length + filteredFavoriteAlmost.length}]</span></div>
-                <div class="tab" data-tab="plan">PLAN<span class="count">[${craftingPlan.items.length}]</span></div>
+                <div class="tab" data-tab="repair">REPAIR</div>
                 <div class="tab" data-tab="goals">GOALS<span class="count">[${itemGoals.length}]</span></div>
                 <div class="tab" data-tab="books">BOOKS<span class="count">[${ownedBooks.length}]</span></div>
                 <div class="tab" data-tab="inventory">INV</div>
@@ -9086,7 +9162,6 @@
                         const ingredientCost = typeof profitData === 'object' ? profitData.ingredientCost : calculateIngredientValue(item.recipe);
                         const resultValue = typeof profitData === 'object' ? profitData.resultValue : calculateResultValue(item.recipe);
                         const grid = getRecipeGrid(item.recipe.recipe);
-                        const isFav = favorites.includes(item.recipe.itemId) || favorites.includes(item.recipe.id);
                         const isWatched = isRecipeWatched(item.recipe);
                         const isNew = newlyAvailable.includes(item.recipe.itemId);
                         const uncraftedBadge = getUncraftedBadge(item.recipe);
@@ -9106,7 +9181,6 @@
                         return `
                         <div class="item craftable" data-recipe-idx="${idx}">
                             <div class="item-row">
-                                <span class="fav-star ${isFav ? 'active' : ''}" data-itemid="${item.recipe.itemId}" data-recipeid="${item.recipe.id || ''}">★</span>
                                 <div class="item-name">${item.name}${uncraftedBadge}${isNew ? '<span class="new-badge">NEW</span>' : ''}</div>
                                 <div class="item-meta">
                                     <span class="gold-value ${profit >= 0 ? 'profit' : 'loss'}">${profit >= 0 ? '+' : ''}${profit.toLocaleString()}g</span>
@@ -9138,7 +9212,6 @@
                             </div>
                             <div class="action-row">
                                 <button class="action-btn primary craft-btn" data-recipe='${JSON.stringify({itemId: item.recipe.itemId, recipe: item.recipe.recipe, name: item.name})}' ${disableCraft ? `disabled title="${stationMissing ? stationLine : 'Leveled pet detected. Manual crafting recommended.'}"` : ''}>${craftLabel}</button>
-                                <button class="action-btn plan-btn" data-recipe='${JSON.stringify({id: item.recipe.id, itemId: item.recipe.itemId, recipe: item.recipe.recipe, name: item.name})}'>+ Plan</button>
                                 <button class="action-btn chain-btn" data-recipe='${JSON.stringify({id: item.recipe.id, itemId: item.recipe.itemId, recipe: item.recipe.recipe, name: item.name})}'>Chain</button>
                                 <button class="action-btn open-craft-btn" data-recipe='${JSON.stringify({itemId: item.recipe.itemId, recipe: item.recipe.recipe, name: item.name})}'>Open</button>
                                 <button class="action-btn watch-btn ${isWatched ? 'active' : ''}" data-recipe='${JSON.stringify({id: item.recipe.id, itemId: item.recipe.itemId, recipe: item.recipe.recipe, name: item.name})}'>${isWatched ? 'Watching' : 'Watch'}</button>
@@ -9501,143 +9574,6 @@
                     `}
                 </div>
 
-                <!-- FAVORITES TAB -->
-                <div class="tab-content" id="tab-favorites">
-                    <div class="category-filter">
-                        <span class="sort-label">Category:</span>
-                        <select class="category-select recipe-category-filter">
-                            <option value="All">All</option>
-                            ${getAllCategories().map(cat => `<option value="${cat}" ${recipeCategory === cat ? 'selected' : ''}>${cat}</option>`).join('')}
-                        </select>
-                    </div>
-                    ${filteredFavoriteCraftable.length === 0 && filteredFavoriteAlmost.length === 0 ? '<div class="no-items">NO FAVORITES YET<br><span style="font-size:10px;color:#5a5a6a;">Click ★ on any recipe to add it</span></div>' : ''}
-                    ${filteredFavoriteCraftable.length > 0 ? `
-                        <div style="padding: 8px 18px; border-bottom: 1px solid #32323c; background: #222228; color: #7a7a8a; font-size: 11px; text-transform: uppercase;">Ready to Craft</div>
-                        ${filteredFavoriteCraftable.map(item => {
-                            const profitData = calculateProfit(item.recipe);
-                            const profit = typeof profitData === 'object' ? profitData.profit : profitData;
-                            const petWarningText = item.petWarning
-                                ? `Leveled pet detected. Manual crafting recommended. ${item.petWarning.text}`
-                                : '';
-                            const stationStatus = item.stationStatus;
-                            const stationMissing = stationStatus && stationStatus.hasStation === false;
-                            const stationLine = stationStatus
-                                ? `Station: ${stationStatus.station.label}${stationStatus.hasStation === false ? ' (missing)' : stationStatus.hasStation === null ? ' (unverified)' : ' (owned)'}`
-                                : '';
-                            const stationClass = stationStatus
-                                ? stationStatus.hasStation === false ? 'missing' : stationStatus.hasStation === null ? 'unknown' : 'owned'
-                                : '';
-                            const disableCraft = !!item.petWarning || stationMissing;
-                            const craftLabel = stationMissing ? 'Need Station' : item.petWarning ? 'Manual' : 'Craft';
-                            const grid = getRecipeGrid(item.recipe.recipe);
-                            return `
-                            <div class="item craftable">
-                                <div class="item-row">
-                                    <span class="fav-star active" data-itemid="${item.recipe.itemId}">★</span>
-                                    <div class="item-name">${item.name}${getUncraftedBadge(item.recipe)}</div>
-                                    <div class="item-meta">
-                                        <span class="gold-value ${profit >= 0 ? 'profit' : 'loss'}">${profit >= 0 ? '+' : ''}${profit.toLocaleString()}g</span>
-                                    </div>
-                                </div>
-                                ${item.petWarning ? `
-                                <div class="item-details pet-warning">
-                                    ${petWarningText}
-                                </div>` : ''}
-                                ${stationStatus ? `
-                                <div class="item-details station-warning ${stationClass}">
-                                    ${stationLine}
-                                </div>` : ''}
-                                ${item.petWarning ? `
-                                <div class="item-details" style="margin-top:6px;">
-                                    <div class="recipe-grid">
-                                        ${grid.map(slot => `<div class="slot ${slot ? 'filled' : 'empty'}">${slot ? getItemName(slot).substring(0,6) : ''}</div>`).join('')}
-                                    </div>
-                                </div>` : ''}
-                                <div class="action-row">
-                                    <button class="action-btn primary craft-btn" data-recipe='${JSON.stringify({itemId: item.recipe.itemId, recipe: item.recipe.recipe, name: item.name})}' ${disableCraft ? `disabled title="${stationMissing ? stationLine : 'Leveled pet detected. Manual crafting recommended.'}"` : ''}>${craftLabel}</button>
-                                    <button class="action-btn plan-btn" data-recipe='${JSON.stringify({id: item.recipe.id, itemId: item.recipe.itemId, recipe: item.recipe.recipe, name: item.name})}'>+ Plan</button>
-                                </div>
-                            </div>
-                        `}).join('')}
-                    ` : ''}
-                    ${filteredFavoriteAlmost.length > 0 ? `
-                        <div style="padding: 8px 18px; border-bottom: 1px solid #32323c; background: #222228; color: #7a7a8a; font-size: 11px; text-transform: uppercase;">Need Items</div>
-                        ${filteredFavoriteAlmost.map(item => {
-                            const missingCost = Object.entries(item.missing).reduce((sum, [id, qty]) => {
-                                const allItems = getAllItems();
-                                return sum + (allItems[id]?.gold || 0) * qty;
-                            }, 0);
-                            return `
-                            <div class="item almost">
-                                <div class="item-row">
-                                    <span class="fav-star active" data-itemid="${item.recipe.itemId}">★</span>
-                                    <div class="item-name">${item.name}${getUncraftedBadge(item.recipe)}</div>
-                                    <div class="item-meta">
-                                        <span class="shopping-qty">-${item.totalMissing}</span>
-                                        <span class="gold-value" style="margin-left:8px;">${missingCost.toLocaleString()}g</span>
-                                    </div>
-                                </div>
-                                <div class="item-details">
-                                    <span class="missing-label">NEED:</span> ${Object.entries(item.missing).map(([id, qty]) =>
-                                        `${getItemName(parseInt(id))} ×${qty}`
-                                    ).join(' / ')}
-                                </div>
-                            </div>
-                        `}).join('')}
-                    ` : ''}
-                </div>
-
-                <!-- PLAN TAB -->
-                <div class="tab-content" id="tab-plan">
-                    <div class="inventory-header">
-                        <div class="inv-stat">
-                            <span class="inv-label">PLAN</span>
-                            <span class="inv-value highlight">${craftingPlan.items.length} recipes</span>
-                        </div>
-                        <div class="inv-stat">
-                            <span class="inv-label">MISSING COST</span>
-                            <span class="inv-value gold-value">${planTotalCost.toLocaleString()}g</span>
-                        </div>
-                    </div>
-                    ${craftingPlan.items.length === 0 ? '<div class="no-items">NO ITEMS IN PLAN<br><span style="font-size:10px;color:#5a5a6a;">Click + Plan on any recipe to add it</span></div>' : ''}
-                    ${craftingPlan.items.map((planItem, idx) => `
-                        <div class="plan-item">
-                            <div class="plan-name">${planItem.name}</div>
-                            <div class="plan-controls">
-                                <button class="qty-btn plan-qty-minus" data-idx="${idx}">−</button>
-                                <span class="plan-qty">×${planItem.quantity}</span>
-                                <button class="qty-btn plan-qty-plus" data-idx="${idx}">+</button>
-                                <span class="plan-remove" data-idx="${idx}" style="cursor:pointer;color:#6a6a7a;margin-left:8px;">×</span>
-                            </div>
-                        </div>
-                    `).join('')}
-                    ${craftingPlan.items.length > 0 ? `
-                        <div style="padding: 8px 18px; border-bottom: 1px solid #32323c; background: #222228; color: #7a7a8a; font-size: 11px; text-transform: uppercase; margin-top:12px;">Missing Ingredients</div>
-                        ${Object.keys(planCalc.missing).length === 0 ? '<div class="no-items" style="color:#6afa8a;">All ingredients available!</div>' : ''}
-                        ${Object.entries(planCalc.missing).map(([id, qty]) => {
-                            const item = getAllItems()[id];
-                            const buyBtn = getBuyButtonHtml(parseInt(id), qty, item?.name || 'Item #' + id, item?.gold || 0);
-                            return `
-                            <div class="shopping-item">
-                                <div>
-                                    <div class="shopping-name">${item?.name || 'Item #' + id}</div>
-                                    <div class="shopping-gold">${(item?.gold || 0).toLocaleString()}g each</div>
-                                </div>
-                                <div style="display:flex; align-items:center; gap:8px;">
-                                    <div class="shopping-qty">×${qty}</div>
-                                    ${buyBtn.html}
-                                </div>
-                            </div>
-                        `}).join('')}
-                        <div style="padding: 14px 18px; display:flex; gap:10px; flex-wrap:wrap; border-top: 1px solid #32323c;">
-                            <button class="action-btn" id="export-plan-text">Export Text</button>
-                            <button class="action-btn" id="export-plan-json">Export JSON</button>
-                            <button class="action-btn" id="import-plan">Import Plan</button>
-                            <button class="action-btn" id="clear-plan" style="margin-left:auto; color:#e08080;">Clear Plan</button>
-                        </div>
-                    ` : ''}
-                </div>
-
                 <!-- GOALS TAB -->
                 <div class="tab-content" id="tab-goals">
                     ${buildGoalsTabContent(itemGoals, inventory)}
@@ -9771,6 +9707,31 @@
                                 No pet level data found. Click Fetch to refresh inventory and pet levels.
                             </div>
                         ` : ''}
+
+                        <div style="margin-top:20px; padding-top:16px; border-top:1px solid #32323c;">
+                            <div style="font-size:11px; color:#8a8a9a; text-transform:uppercase; margin-bottom:12px;">Accessibility</div>
+
+                            <div style="margin-bottom:12px;">
+                                <label style="display:block; font-size:11px; color:#b0b0c0; margin-bottom:6px;">Font Size</label>
+                                <select id="opt-font-size" style="background:#2a2a32; border:1px solid #3a3a45; color:#d0d0d8; padding:8px 10px; border-radius:4px; font-size:12px; width:100%; box-sizing:border-box; cursor:pointer;">
+                                    <option value="small" ${uiPrefs.fontSize === 'small' ? 'selected' : ''}>Small</option>
+                                    <option value="medium" ${uiPrefs.fontSize === 'medium' ? 'selected' : ''}>Medium</option>
+                                    <option value="large" ${uiPrefs.fontSize === 'large' ? 'selected' : ''}>Large</option>
+                                </select>
+                            </div>
+
+                            <div style="margin-bottom:12px;">
+                                <label style="display:block; font-size:11px; color:#b0b0c0; margin-bottom:6px;">Color Theme</label>
+                                <select id="opt-color-theme" style="background:#2a2a32; border:1px solid #3a3a45; color:#d0d0d8; padding:8px 10px; border-radius:4px; font-size:12px; width:100%; box-sizing:border-box; cursor:pointer;">
+                                    <option value="default" ${uiPrefs.colorTheme === 'default' ? 'selected' : ''}>Dark</option>
+                                    <option value="light" ${uiPrefs.colorTheme === 'light' ? 'selected' : ''}>Light</option>
+                                    <option value="high-contrast" ${uiPrefs.colorTheme === 'high-contrast' ? 'selected' : ''}>High Contrast</option>
+                                </select>
+                            </div>
+                            <div style="font-size:10px; color:#6a6a7a; line-height:1.4;">
+                                Adjust font size and color theme for better readability.
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -11679,16 +11640,6 @@
             });
         }
 
-        // Favorite star handlers
-        panel.querySelectorAll('.fav-star').forEach(star => {
-            star.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const itemId = parseInt(star.dataset.itemid, 10);
-                const added = await toggleFavorite(itemId);
-                star.classList.toggle('active', added);
-            });
-        });
-
         // Sort button handlers
         const sortBtns = panel.querySelectorAll('.sort-btn[data-sort]');
         console.log('[GGn Can Make] Found sort buttons:', sortBtns.length);
@@ -11738,113 +11689,6 @@
                 }
             });
         });
-
-        // Plan button handlers
-        panel.querySelectorAll('.plan-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const recipeData = JSON.parse(btn.dataset.recipe);
-                const batchInput = btn.parentElement.querySelector('.batch-input');
-                const qty = batchInput ? parseInt(batchInput.value, 10) || 1 : 1;
-                await addToPlan(recipeData, qty);
-                btn.textContent = 'Added!';
-                btn.style.color = '#5a9a5a';
-                setTimeout(() => {
-                    btn.textContent = '+ Plan';
-                    btn.style.color = '';
-                }, 1000);
-            });
-        });
-
-        // Plan quantity buttons
-        panel.querySelectorAll('.plan-qty-plus').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const idx = parseInt(btn.dataset.idx, 10);
-                const plan = await getCraftingPlan();
-                if (plan.items[idx]) {
-                    plan.items[idx].quantity++;
-                    await saveCraftingPlan(plan);
-                    panel.remove();
-                    init(false);
-                }
-            });
-        });
-
-        panel.querySelectorAll('.plan-qty-minus').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const idx = parseInt(btn.dataset.idx, 10);
-                const plan = await getCraftingPlan();
-                if (plan.items[idx] && plan.items[idx].quantity > 1) {
-                    plan.items[idx].quantity--;
-                    await saveCraftingPlan(plan);
-                    panel.remove();
-                    init(false);
-                }
-            });
-        });
-
-        panel.querySelectorAll('.plan-remove').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const idx = parseInt(btn.dataset.idx, 10);
-                await removeFromPlan(idx);
-                panel.remove();
-                init(false);
-            });
-        });
-
-        // Clear plan button
-        const clearPlanBtn = document.getElementById('clear-plan');
-        if (clearPlanBtn) {
-            clearPlanBtn.addEventListener('click', async () => {
-                if (confirm('Clear entire crafting plan?')) {
-                    await clearPlan();
-                    panel.remove();
-                    init(false);
-                }
-            });
-        }
-
-        // Export plan text
-        const exportTextBtn = document.getElementById('export-plan-text');
-        if (exportTextBtn) {
-            exportTextBtn.addEventListener('click', async () => {
-                const plan = await getCraftingPlan();
-                const text = exportPlanToText(plan);
-                navigator.clipboard.writeText(text);
-                exportTextBtn.textContent = 'Copied!';
-                setTimeout(() => { exportTextBtn.textContent = 'Export Text'; }, 1500);
-            });
-        }
-
-        // Export plan JSON
-        const exportJsonBtn = document.getElementById('export-plan-json');
-        if (exportJsonBtn) {
-            exportJsonBtn.addEventListener('click', async () => {
-                const plan = await getCraftingPlan();
-                const json = exportPlanToJSON(plan);
-                navigator.clipboard.writeText(json);
-                exportJsonBtn.textContent = 'Copied!';
-                setTimeout(() => { exportJsonBtn.textContent = 'Export JSON'; }, 1500);
-            });
-        }
-
-        // Import plan
-        const importPlanBtn = document.getElementById('import-plan');
-        if (importPlanBtn) {
-            importPlanBtn.addEventListener('click', async () => {
-                const json = prompt('Paste plan JSON:');
-                if (json) {
-                    const result = importPlanFromJSON(json);
-                    if (result.success) {
-                        await saveCraftingPlan(result.plan);
-                        panel.remove();
-                        init(false);
-                    } else {
-                        alert('Import failed: ' + result.error);
-                    }
-                }
-            });
-        }
 
         // Goal quantity buttons
         panel.querySelectorAll('.goal-qty-plus').forEach(btn => {
@@ -11993,6 +11837,36 @@
                 prefs.autoOpenPanel = autoOpenToggle.checked;
                 await saveUIPrefs(prefs);
                 currentUiPrefs = prefs;
+            });
+        }
+
+        // Font size option
+        const fontSizeSelect = document.getElementById('opt-font-size');
+        if (fontSizeSelect) {
+            fontSizeSelect.addEventListener('change', async () => {
+                const prefs = await getUIPrefs();
+                prefs.fontSize = fontSizeSelect.value;
+                await saveUIPrefs(prefs);
+                currentUiPrefs = prefs;
+                // Apply immediately
+                panel.classList.remove('font-small', 'font-medium', 'font-large');
+                panel.classList.add('font-' + prefs.fontSize);
+            });
+        }
+
+        // Color theme option
+        const colorThemeSelect = document.getElementById('opt-color-theme');
+        if (colorThemeSelect) {
+            colorThemeSelect.addEventListener('change', async () => {
+                const prefs = await getUIPrefs();
+                prefs.colorTheme = colorThemeSelect.value;
+                await saveUIPrefs(prefs);
+                currentUiPrefs = prefs;
+                // Apply immediately
+                panel.classList.remove('theme-default', 'theme-light', 'theme-high-contrast');
+                if (prefs.colorTheme !== 'default') {
+                    panel.classList.add('theme-' + prefs.colorTheme);
+                }
             });
         }
 
